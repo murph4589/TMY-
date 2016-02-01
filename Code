@@ -1,0 +1,744 @@
+import os
+import pandas as pd
+import numpy as np
+import time
+import pickle
+import math
+
+start_time = time.time()
+
+os.chdir("/Users/seanmurphy/Desktop/Sean Murphy/Data/Meteorological/IMD/Surface")
+file = "NCEI data.txt"
+d = pd.read_fwf("NCEI data.txt", index_col = 2)
+os.chdir("/Users/seanmurphy/Desktop/Sean Murphy/Data/Meteorological/Code")
+#d.to_pickle("NCEI Raw.pkl")
+
+
+#removing the fields not needed for the TMY
+d.drop(["USAF", "WBAN","MW","MW.1","MW.2","MW.3","ALT","STP","PCP01","PCP06","PCP24","PCPXX","SD","AW","AW.1","AW.2","AW.3","W","SKC","VSB","L","M","H","CLG"],axis = 1, inplace = True)
+#d.drop("MW", axis = 1, inplace = True)
+
+d.index = pd.to_datetime(d.index, format = "%Y%m%d%H%M")
+
+#removing the ***** entries and replacing with nans
+
+formatter = lambda x: float(x) if "*" not in x else np.nan
+f_to_k = lambda x: (x - 32)/1.80 + 273.15 if type(x) != np.nan else x
+mph_to_mps = lambda x: x * 0.44704 if type(x) != np.nan else x
+d = d.applymap(formatter)
+#there are missing values. Need to consider some alternative methods of interpolating within a day. For long term, Next try finding averages at each month-day-hour and then weighting the daily average accoding the the hourly counts
+d.interpolate(method = "index",axis = 0,inplace = True)
+
+
+t = pd.date_range(start = "1980-01-01 00:00:00", end = "2015-12-31 23:30:00", freq= "3H")
+#t_index = pd.MultiIndex.from_arrays([t.year,t.month,t.day,t.hour], names = ["Year","Month","Day","Hour"])
+
+q = pd.DataFrame(np.random.randn(len(t),1), columns = ["Dummy"], index = t )
+
+
+three_hourly = q.join(d, how = "inner",  )
+three_hourly.drop("Dummy", axis =1, inplace=True)
+
+t_hour = three_hourly.index.hour
+
+
+t_day = three_hourly.index.day
+t_month = three_hourly.index.month
+t_year = three_hourly.index.year
+year_month = [str(y) + "-" + str(m) for y,m in zip(t_year,t_month)]
+
+f_year_month = set(year_month)
+f_year = [x[0:4] for x in f_year_month]
+f_month = [x[5:] for x in f_year_month]
+
+three_hourly["Hour"] = t_hour
+three_hourly["Day"] = t_day
+three_hourly["Month"] = t_month
+three_hourly["Year"] = t_year
+
+
+#three_hourly.index = pd.MultiIndex.from_arrays([three_hourly.index], names = ["Date"])
+
+three_hourly.index = pd.MultiIndex.from_arrays([three_hourly.index.year,three_hourly.index.month, three_hourly.index.day, three_hourly.index.hour], names = ["Year","Month","Day","Hour"])
+
+
+
+
+#short_term_averages = pd.pivot_table(three_hourly, index = ["Year","Month","Day"],values = ["DIR","SPD","TEMP","DEWP","SLP","MAX","MIN"], aggfunc= [np.mean],dropna= True)
+short_term_averages = pd.pivot_table(three_hourly, index = ["Year","Month","Day"],values = ["DIR","SPD","TEMP","DEWP","SLP","MAX","MIN"], aggfunc= [np.mean],dropna= True)
+
+#30 minute data seems to come in around April 1 2009
+#hourly data, with varying amounts of gaps, beings feb 1 1996
+long_term_averages = pd.pivot_table(three_hourly, index = ["Month","Day"], values = ["DIR","SPD","TEMP","DEWP","SLP","MAX","MIN"], aggfunc= [np.mean],dropna= True )
+
+short_term_averages.columns = ["DEWP short","DIR short","MAX short","MIN short","SLP short","SPD short","TEMP short"]
+long_term_averages.columns = ["DEWP long","DIR long","MAX long","MIN long","SLP long","SPD long","TEMP long"]
+
+columns = ["DIR","SPD","TEMP","DEWP","SLP","MAX","MIN"]
+colum = ["MAX"]
+short_year = [ str(x[0]) for x in short_term_averages.index]
+short_month = [str(x[1]) for x in short_term_averages.index]
+short_day = [str(x[2]) for x in short_term_averages.index]
+
+
+short_term_averages["Year"] = short_year
+short_term_averages["Month"] = short_month
+short_term_averages["Day"] = short_day
+# short_term_averages.reset_index(inplace=True)
+# long_term_averages.reset_index(inplace= True)
+
+long_month = [str(x[0]) for x in long_term_averages.index]
+long_day = [str(x[1]) for x in long_term_averages.index]
+long_term_averages["Month"] = long_month
+long_term_averages["Day"] = long_day
+
+
+#short_term_averages.sort(["Year","Month","DEWP short"], axis = 0, inplace = True)
+
+#long_term_averages.sort(["Month","DEWP long"], axis = 0, inplace = True)
+
+
+short_term_averages["Rank"] = short_term_averages.groupby(by = ["Year","Month" ])["DEWP short"].rank()
+long_term_averages["Rank"] = long_term_averages.groupby(by = ["Month"])["DEWP long"].rank()
+# print short_term_averages.head()
+short_group = short_term_averages.groupby(by = ["Year","Month" ])
+long_group = long_term_averages.groupby("Month")
+
+# for name,group in short_group:
+#     print name, name[0],name[1]
+#     print short_group
+#     print "afdglksdfg", group["DEWP short"]
+#
+# print short_term_averages.index
+# print long_term_averages.index
+a = [x for x in short_term_averages.index]
+# print a[0:10]
+b = [type(x) for x in a]
+# print b[0:10]
+#by creating the group, I can iterate through each month sorted by a particular variable. I can then compare those values to the long term
+
+# print short_term_averages.loc[(short_term_averages["Year"].isin(["1981"])) & (short_term_averages["Month"].isin(["1"]))]
+# print short_term_averages.loc[(short_term_averages["Year"].isin(["1981"])) & (short_term_averages["Month"].isin(["1"]))]["DEWP short"]
+a = long_term_averages.loc[long_term_averages["Month"].isin(["1"])]
+# print a
+b = short_term_averages.loc[(short_term_averages["Year"].isin(["1981"])) & (short_term_averages["Month"].isin(["1"]))]
+# print b["DEWP short"]
+c = a.merge(b, how = "inner", on = "Rank", indicator = True)
+# print c
+c["Delta"] = c["DEWP short"] - c["DEWP long"]
+# print c[["Delta","DEWP short","DEWP long","Rank"]]
+# print c["Delta"]
+# print c["Delta"].tolist()
+# print sum(c["Delta"].tolist())
+
+
+fs_index = pd.MultiIndex.from_arrays([f_year,f_month], names = ["Year","Month"])
+
+fs = pd.DataFrame(f_year,index = fs_index, columns = ["Year"] )
+
+fs["Month"] = f_month
+weight_dict = {"DIR": .025,"SPD":.05,"TEMP": .35,"DEWP": .15,"SLP": .025,"MAX": .2,"MIN": .2}
+fs = fs.sortlevel(0)
+
+# print" !!!!!!!!!!!!!!!!!", fs.head()
+
+short_term_averages
+
+#for each variable, ranks months, compare short term months to long term months, calculate FS statistic, store somewhere
+storage = {}
+for col in columns:
+    storage[col] = {}
+    for m in range(1,13):
+        storage[col][str(m)] = {}
+        for y in range(1980,2016):
+
+            var_short = col + " " + "short"
+            var_long = col + " " + "long"
+            short_term_averages["Rank"] = short_term_averages.groupby(by = ["Year","Month" ])[var_short].rank()
+            long_term_averages["Rank"] = long_term_averages.groupby(by = ["Month"])[var_long].rank()
+
+            a = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]
+
+            b = long_term_averages.loc[long_term_averages["Month"].isin([str(m)])]
+            c = a.merge(b, how = "inner", on = "Day", indicator = True)
+            l = c.shape[0]  #the number of rankings, ie the number of days in the month
+            c["Rank s"] = c[var_short].rank()
+            c["Rank s"] =c["Rank s"].apply(math.ceil) #if two values are the same value, rank returns the average rank between the ranks that would be given to them separately. We want to round up because the CDF is concerned with what is less than or equal to values.
+            c["CDF s"] = c["Rank s"]/l
+
+            c["CDF s"] = c["Rank s"]/l #CDF values for each ranking
+
+            def f(y):
+                lessoreq = c.loc[c[var_long] <= y]
+                if lessoreq.shape[0] == 0:
+                    cdf_l_at_s = 1/(c.shape[0] +1)
+                else:
+                    index = lessoreq[var_long].idxmax()
+                    cdf_l_at_s = lessoreq.ix[index]["CDF s"]
+                cdf_at_s = c.loc[(c[var_short]) == x ]["CDF s"]
+                delta = abs(cdf_l_at_s - cdf_at_s.iloc[0])
+                return delta
+            c["Delta"] = [f(x) for x in c[var_short]]
+
+            fs_name = "%s fs delta" % col
+            key = str(y) + "-" + str(m)
+            fs.loc[(str(y),str(m)),fs_name] = reduce(lambda a,b: a +b,c["Delta"].tolist())
+
+short_term_averages.to_pickle("Short Term Averages all years.pkl")
+long_term_averages.to_pickle("Long Term Averages all yers.pkl")
+
+           # storage[col][str(m)][str(y)] = (sum(c["Delta"].tolist()), len(c["Delta"].tolist()))
+print fs.head()
+weight_dict = {"DIR": .025,"SPD":.05,"TEMP": .35,"DEWP": .15,"SLP": .025,"MAX": .2,"MIN": .2}
+#fs["Weighted Sum"] = [.025*fs["DIR fs delta"] + .05*fs["SPD fs delta"] +.35*fs["TEMP fs delta"] +.15*fs["DEWP fs delta"] +.025*fs["SLP fs delta"] +.2*fs["MAX fs delta"] +.2*fs["MIN fs delta"]]
+for c in weight_dict:
+    i = c + " weight"
+    d = weight_dict[c]
+    fs[i] = d
+
+
+print fs.head()
+#calculating weighted sum of delta
+fs["Weighted sum"] = fs["DIR fs delta"] * fs["DIR weight"] + fs["SPD fs delta"]*fs["SPD weight"] + fs["TEMP fs delta"]*fs["TEMP weight"] + fs["DEWP fs delta"]*fs["DEWP weight"] + fs["SLP fs delta"]*fs["SLP weight"] + fs["MAX fs delta"]*fs["MAX weight"] + fs["MIN fs delta"]*fs["MIN weight"]
+print fs.head()
+
+
+os.chdir("/Users/seanmurphy/Desktop/Sean Murphy/Data/Meteorological/Code")
+
+fs["Weight Rank"] = fs.groupby(by = ["Month" ])["Weighted sum"].rank() #ranking months by their weighted fs stat scores
+
+fs.to_pickle("FS_all_years_pickle.pkl")
+#
+# weight_rank_dict = {}
+# for m in range(1,13):
+#     weight_rank_dict[str(m)] = {}
+#     for y in range(1980,1987) :
+#
+#         r = fs.loc[(fs["Year"] == str(y)) & (fs["Month"] == str(m)) ]["Weight Rank"]
+#         if r.iloc[0] <= 5:
+#             weight_rank_dict[str(m)][str(y)] = r.iloc[0]  #taking the top 5
+# print weight_rank_dict
+#
+# #queuing up the top five months for further analysis in short term averages
+# stat_rank_dict = {}
+# for m in weight_rank_dict.keys():
+#     stat_rank_dict[m] = {}
+#     for y in weight_rank_dict[m].keys():
+#         short_term_test_mean_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["TEMP short"].mean()
+#         short_term_test_median_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["TEMP short"].median()
+#         short_term_test_mean_max_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["MAX short"].mean()
+#         short_term_test_median_max_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["MAX short"].median()
+#
+#         long_term_test_mean_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["TEMP long"].mean()
+#         long_term_test_median_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["TEMP long"].median()
+#         long_term_test_mean_max_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["MAX long"].mean()
+#         long_term_test_median_max_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["MAX long"].median()
+#
+#         a = abs(short_term_test_mean_temp - long_term_test_mean_temp)
+#         b = abs(short_term_test_median_temp - long_term_test_median_temp  )
+#         c = abs(short_term_test_mean_max_temp - long_term_test_mean_max_temp)
+#         d = abs(short_term_test_median_max_temp - long_term_test_median_max_temp)
+#         max_stat = max(a,b,c,d)
+#
+#         stat_rank_dict[m][y] = max_stat
+#         fs.loc[(str(y),str(m)),"Max Stat"] = max_stat
+#         fs["Max Stat Rank"] = fs.groupby(by = ["Month"])["Max Stat"].rank()
+#
+#
+#         #temp run  check
+#         dailys = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["TEMP short"].tolist()
+#         #threshold is value whose CDF value is closest to .67
+#         sixty_seven_index = int(.677*len(dailys) - 1) #this is the index where we will find the value in the 67th percentile
+#         thirty_third_index = int(.333*len(dailys) - 1) #this is the index where we will find the value in the 33rd percentile
+#         run_above = 0
+#         run_below = 0
+#         run_above_list = []
+#         run_below_list = []
+#         for d in range(1,len(dailys)):
+#             if dailys[d] > sorted(dailys)[sixty_seven_index] and dailys[d-1] > sorted(dailys)[sixty_seven_index]:
+#                 run_above += 1
+#             elif dailys[d] < sorted(dailys)[thirty_third_index] and dailys[d-1] < sorted(dailys)[thirty_third_index]:
+#                 run_above += 1
+#             else:
+#                 run_above_list.append(run_above)
+#                 run_below_list.append(run_below)
+#                 run_above = 0
+#                 run_below = 0
+#         run_above_list = [ x for x in run_above_list if x> 1]
+#         run_below_list = [x for x in run_below_list if x>1]
+#         total_runs = run_above_list + run_below_list
+#         max_run = max(total_runs)
+#         run_count = len(total_runs)
+#         fs.loc[(str(y),str(m)),"Max Run"] = max_run
+#         fs.loc[(str(y),str(m)),"Run Count"] = run_count
+#
+#
+# fs["Max Stat Rank"] = fs.groupby(by = ["Month" ])["Max Stat"].rank()
+# selected_year = {}
+# to_remove = []
+# #print fs.head()
+#
+# for m in weight_rank_dict.keys():
+#     print "the weight rank dict starts as ", weight_rank_dict[m]
+#     print m,weight_rank_dict[m]
+#     possible_years = [x for x in weight_rank_dict[m]]
+#     runs_withnas = fs.loc[(fs["Month"] == str(m)),"Run Count"].tolist()
+#     runs = [x for x in runs_withnas if np.isnan(x) == False]
+#     print "runs are", runs
+#     max_run_lengthna = fs.loc[(fs["Month"] == str(m))]["Max Run"].tolist()
+#     max_run_length = [x for x in max_run_lengthna if np.isnan(x) == False]
+#     print "max run length is", max_run_length
+#
+#     if not runs: #seeing if there are not runs. in that case, take the best ranked max stat
+#         selected_year[str(m)] = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] ==1),"Year"]
+#
+#     elif runs.count(runs[0]) == len(runs): #if there are runs, see if run number is equal across candidates
+#         if max_run_length.count(max_run_length[0]) == len(max_run_length): # seeing if the max run lengths are the same. If they are, remove the lowest ranked
+#
+#             year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == 5),"Year"].iloc[0]
+#             print " 1, year to remove is", year_to_remove
+#             del weight_rank_dict[m][year_to_remove]
+#
+#             fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == 5),"Year"] = np.nan
+#             trimmed_weight_rank_dict = weight_rank_dict
+#             print "possible years left are", trimmed_weight_rank_dict[m]
+#
+#         else:         #if not all of the max run lengths are equal, remove the longest one
+#             longest = max(max_run_length)
+#             print "longest is", longest
+#             year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest)]["Year"].iloc[0]
+#
+#             print "2,year to remove is", year_to_remove
+#             del weight_rank_dict[m][year_to_remove]
+#             fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest),"Year"] = np.nan
+#             #max_run_length.remove(longest)
+#             trimmed_weight_rank_dict = weight_rank_dict
+#             print "possible years left are", trimmed_weight_rank_dict[m]
+#     else:
+#
+#         most_runs = max(runs) #now, if the run numbers are unequal, remove the one with the most runs #it may be the case that the max number of runs happends twice. In that case, delete the one that has the lowest weight rank
+#         print "most runs are", most_runs
+#         possible_years_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs),"Max Stat Rank"]
+#
+#         year_ranks = possible_years_ranks.tolist()
+#         worst_rank = max(year_ranks)
+#         #print "worst rank is", worst_rank
+#
+#         year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"].iloc[0]
+#         #print fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank)]["Year"]
+#         print "3, year to remove is", year_to_remove
+#         del weight_rank_dict[m][year_to_remove]
+#         trimmed_weight_rank_dict = weight_rank_dict
+#
+#         print "possible years left are", trimmed_weight_rank_dict[m]
+#         fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"] = np.nan
+#        # print "please", fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"].iloc[0]
+#         #print fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"].iloc[0]
+#
+#
+# for m in trimmed_weight_rank_dict.keys(): #starting up again with some years removed. have analyzed the total runs, now looking at length
+#
+#     runs_withnas = fs.loc[(fs["Month"] == str(m)),"Run Count"].tolist()
+#     runs = [x for x in runs_withnas if np.isnan(x) == False]
+#     print runs
+#     max_run_lengthna = fs.loc[(fs["Month"] == str(m))]["Max Run"].tolist()
+#     max_run_length = [x for x in max_run_lengthna if np.isnan(x) == False]
+#     possible_years = [x for x in trimmed_weight_rank_dict[m]]
+#
+#     if max_run_length.count(max_run_length[0]) != len(max_run_length): #if max lengths are not equal, remove the longest one. It's possible two months have the same max length. will remove the one that is lowest ranked
+#         longest = max(max_run_length)
+#
+#         possible_years_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest) & (fs["Year"].isin(possible_years)),"Max Stat Rank" ]
+#         #print "2nd test round",possible_years_ranks.head()
+#         year_ranks = possible_years_ranks.tolist()
+#         worst_rank = max(year_ranks)
+#         #print "worst rank is", worst_rank
+#         year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest),"Year"].iloc[0]
+#         fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest),"Year"] = np.nan
+#
+#         print "5,year to remove is", year_to_remove
+#
+#         if year_to_remove in trimmed_weight_rank_dict[m]:
+#             del trimmed_weight_rank_dict[m][year_to_remove]
+#
+#
+#         final_weight_rank_dict = trimmed_weight_rank_dict
+#         print "possible years left are", final_weight_rank_dict
+#
+#     else:
+#         if runs.count(runs[0]) == len(runs): #if number of ranks is equal, remove the bootom ranked one
+#
+#             ranks = fs.loc[(fs["Month"] == str(m)) & fs["Year"].isin(possible_years), "Max Stat Rank"].tolist()
+#             max_rank = max(ranks)
+#
+#             year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == max_rank),"Year"].iloc[0]
+#             fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == max_rank),"Year"] = np.nan
+#             print "5 year to remove is", year_to_remove
+#
+#             del trimmed_weight_rank_dict[m][year_to_remove]
+#             final_weight_rank_dict = trimmed_weight_rank_dict
+#
+#             print "possible years are", final_weight_rank_dict[m]
+#
+#         else: #remove the one with the most runs
+#             most_runs = max(runs) #now, if the run numbers are unequal, remove the one with the most runs. It's possible the max will occur twice. let rankings determine winner then
+#             if runs.count(most_runs) >1:
+#
+#                 run_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs),"Max Stat Rank"].tolist()
+#                 min_run_rank = min(run_ranks)
+#
+#                 year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == min_run_rank),"Year"].iloc[0]
+#                 fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == min_run_rank),"Year"] = np.nan
+#                 print "6, year to remove is", year_to_remove
+#
+#             else:
+#                 year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs),"Year"].iloc[0]
+#                 fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs),"Max Stat Rank"] = np.nan
+#                 print "7, year to remove is", year_to_remove
+#
+#
+#             if year_to_remove in trimmed_weight_rank_dict[m]:
+#                 del trimmed_weight_rank_dict[m][year_to_remove]
+#
+#             final_weight_rank_dict = trimmed_weight_rank_dict
+#             print final_weight_rank_dict[m]
+#     if 0 in runs:
+#         runs_rank =  fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == 0),"Max Stat Rank"].tolist()
+#         max_rank = max(runs_rank)
+#
+#         year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == 0) & (fs["Max Stat Rank"] == max_rank),"Year"].iloc[0]
+#         fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == 0) & (fs["Max Stat Rank"] == max_rank),"Year"] = np.nan
+#         print "8, year to remove is", year_to_remove
+#
+#         if year_to_remove in trimmed_weight_rank_dict[m]:
+#             del trimmed_weight_rank_dict[m][year_to_remove]
+#
+#     final_weight_rank_dict = trimmed_weight_rank_dict
+#     print "possible values are", final_weight_rank_dict[m]
+# tmy = {}
+# for m in final_weight_rank_dict:
+#
+#
+#     possible_years = [x for x in final_weight_rank_dict[m]]
+#     print "possible years from final weight dict are", possible_years
+#     #possible_years_y = [x for x in possible_years_x if np.isnan(x) == False]
+#
+#
+#     possible_years_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Year"].isin(possible_years)),"Max Stat Rank"].tolist()
+#     min_rank = min(possible_years_ranks)
+#
+#     year_to_select = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == min_rank),"Year"].iloc[0]
+#
+#
+#
+#     print m, year_to_select
+#     tmy[m] = year_to_select
+# pickle.dump(tmy,open("NCEI TMY Pickle","wb"))
+#
+#
+#
+#
+# # # must now determine 5 candidates for each month. They will have the lowest weighted score    #in fs group by month, sort by sum, drop bottom 7
+# #     #then calculate short term and long term median and mean for each of these months for temp and max temp # calc from short term averages and long term averages (mean and median version), add to FS at y-m level
+# #         #calculate the deltas between the short and long term statistics for both variables
+# #             #for ecah month, assign the maximum of these four statistics
+# #                 #rank them
+# #     # calculate number of an length of runs above and below long term levels # do this within the shortterm averages (number of runs, max run length), add to fs at y-m level
+# #         #for temp, above 67th and below 33rd
+# #     #elimination
+# #         #if no months have runs, the first month ranked is chosen
+# #         #if run number is equal
+# #             # if run length is unequal
+# #                 #remove the one with the longest
+# #             # if run length is equal
+# #                 #remove the bottom ranked one (from mean median rank)
+# #         #if run numbers are unequal
+# #             #remove one with most runs
+# #
+# #         #if remaining months have unequal max run length
+# #             #remove the month with the longest run
+# #         #if remaining months have the same max run length
+# #             #if number of runs is equal, remove the bottom ranked one
+# #             #if the number of runs is not equal,
+# #                 #remove the one with the most runs
+# #         #remove the month with zero runs
+# #         #select the top ranked month
+
+
+import os
+import pandas as pd
+import numpy as np
+import time
+import pickle
+import math
+os.chdir("/Users/seanmurphy/Desktop/Sean Murphy/Data/Meteorological/Code")
+
+start_time = time.time()
+short_term_averages = pd.read_pickle("Short Term Averages all years.pkl")
+long_term_averages = pd.read_pickle("Long Term Averages all yers.pkl")
+fs = pd.read_pickle("FS_all_years_pickle.pkl")
+
+
+weight_rank_dict = {}
+for m in range(1,13):
+    weight_rank_dict[str(m)] = {}
+    for y in range(1980,2016) :
+
+        r = fs.loc[(fs["Year"] == str(y)) & (fs["Month"] == str(m)) ]["Weight Rank"]
+        if r.iloc[0] <= 5:
+            weight_rank_dict[str(m)][str(y)] = r.iloc[0]  #taking the top 5
+print weight_rank_dict
+
+#queuing up the top five months for further analysis in short term averages
+stat_rank_dict = {}
+for m in weight_rank_dict.keys():
+    stat_rank_dict[m] = {}
+    for y in weight_rank_dict[m].keys():
+        short_term_test_mean_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["TEMP short"].mean()
+        short_term_test_median_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["TEMP short"].median()
+        short_term_test_mean_max_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["MAX short"].mean()
+        short_term_test_median_max_temp = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["MAX short"].median()
+
+        long_term_test_mean_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["TEMP long"].mean()
+        long_term_test_median_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["TEMP long"].median()
+        long_term_test_mean_max_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["MAX long"].mean()
+        long_term_test_median_max_temp = long_term_averages.loc[(long_term_averages["Month"].isin([str(m)]))]["MAX long"].median()
+
+        a = abs(short_term_test_mean_temp - long_term_test_mean_temp)
+        b = abs(short_term_test_median_temp - long_term_test_median_temp  )
+        c = abs(short_term_test_mean_max_temp - long_term_test_mean_max_temp)
+        d = abs(short_term_test_median_max_temp - long_term_test_median_max_temp)
+        max_stat = max(a,b,c,d)
+
+        stat_rank_dict[m][y] = max_stat
+        fs.loc[(str(y),str(m)),"Max Stat"] = max_stat
+        fs["Max Stat Rank"] = fs.groupby(by = ["Month"])["Max Stat"].rank()
+
+
+        #temp run  check
+        dailys = short_term_averages.loc[(short_term_averages["Year"].isin([str(y)])) & (short_term_averages["Month"].isin([str(m)]))]["TEMP short"].tolist()
+        #threshold is value whose CDF value is closest to .67
+        sixty_seven_index = int(.677*len(dailys) - 1) #this is the index where we will find the value in the 67th percentile
+        thirty_third_index = int(.333*len(dailys) - 1) #this is the index where we will find the value in the 33rd percentile
+        run_above = 0
+        run_below = 0
+        run_above_list = []
+        run_below_list = []
+        for d in range(1,len(dailys)):
+            if dailys[d] > sorted(dailys)[sixty_seven_index] and dailys[d-1] > sorted(dailys)[sixty_seven_index]:
+                run_above += 1
+            elif dailys[d] < sorted(dailys)[thirty_third_index] and dailys[d-1] < sorted(dailys)[thirty_third_index]:
+                run_above += 1
+            else:
+                run_above_list.append(run_above)
+                run_below_list.append(run_below)
+                run_above = 0
+                run_below = 0
+        run_above_list = [ x for x in run_above_list if x> 1]
+        run_below_list = [x for x in run_below_list if x>1]
+        total_runs = run_above_list + run_below_list
+        max_run = max(total_runs)
+        run_count = len(total_runs)
+        fs.loc[(str(y),str(m)),"Max Run"] = max_run
+        fs.loc[(str(y),str(m)),"Run Count"] = run_count
+
+
+fs["Max Stat Rank"] = fs.groupby(by = ["Month" ])["Max Stat"].rank()
+selected_year = {}
+to_remove = []
+#print fs.head()
+
+for m in weight_rank_dict.keys():
+    print "the weight rank dict starts as ", weight_rank_dict[m]
+    print m,weight_rank_dict[m]
+    possible_years = [x for x in weight_rank_dict[m]]
+    runs_withnas = fs.loc[(fs["Month"] == str(m)),"Run Count"].tolist()
+    runs = [x for x in runs_withnas if np.isnan(x) == False]
+    print "runs are", runs
+    max_run_lengthna = fs.loc[(fs["Month"] == str(m))]["Max Run"].tolist()
+    max_run_length = [x for x in max_run_lengthna if np.isnan(x) == False]
+    print "max run length is", max_run_length
+
+    if not runs: #seeing if there are not runs. in that case, take the best ranked max stat
+        selected_year[str(m)] = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] ==1),"Year"]
+
+    elif runs.count(runs[0]) == len(runs): #if there are runs, see if run number is equal across candidates
+        if max_run_length.count(max_run_length[0]) == len(max_run_length): # seeing if the max run lengths are the same. If they are, remove the lowest ranked
+            print m,weight_rank_dict[m]
+            possible_years = [x for x in weight_rank_dict[m]]
+            possible_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Year"].isin(possible_years)), "Max Stat Rank"]
+            year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == 5) & (fs["Year"].isin(possible_years)),"Year"].iloc[0]
+            print " 1, year to remove is", year_to_remove
+            del weight_rank_dict[m][year_to_remove]
+
+            fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == 5),"Year"] = np.nan
+            trimmed_weight_rank_dict = weight_rank_dict
+            print "possible years left are", trimmed_weight_rank_dict[m]
+
+        else:         #if not all of the max run lengths are equal, remove the longest one
+            longest = max(max_run_length)
+            print "longest is", longest
+            possible_years = [x for x in weight_rank_dict[m]]
+            year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest) & (fs["Year"].isin(possible_years)),"Year"].iloc[0]
+
+            print "2,year to remove is", year_to_remove
+            del weight_rank_dict[m][year_to_remove]
+            fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest),"Year"] = np.nan
+            #max_run_length.remove(longest)
+            trimmed_weight_rank_dict = weight_rank_dict
+            print "possible years left are", trimmed_weight_rank_dict[m]
+    else:
+
+        most_runs = max(runs) #now, if the run numbers are unequal, remove the one with the most runs #it may be the case that the max number of runs happends twice. In that case, delete the one that has the lowest weight rank
+        print "most runs are", most_runs
+        possible_years_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs),"Max Stat Rank"]
+        possible_years = [x for x in weight_rank_dict[m]]
+        year_ranks = possible_years_ranks.tolist()
+        worst_rank = max(year_ranks)
+        #print "worst rank is", worst_rank
+
+        year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank) & (fs["Year"].isin(possible_years)),"Year"].iloc[0]
+        #print fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank)]["Year"]
+        print "3, year to remove is", year_to_remove
+        del weight_rank_dict[m][year_to_remove]
+        trimmed_weight_rank_dict = weight_rank_dict
+
+        print "possible years left are", trimmed_weight_rank_dict[m]
+        fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"] = np.nan
+       # print "please", fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"].iloc[0]
+        #print fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == worst_rank),"Year"].iloc[0]
+
+
+for m in trimmed_weight_rank_dict.keys(): #starting up again with some years removed. have analyzed the total runs, now looking at length
+    possible_years = [x for x in trimmed_weight_rank_dict[m]]
+    runs_withnas = fs.loc[(fs["Month"] == str(m)),"Run Count"].tolist()
+    runs = [x for x in runs_withnas if np.isnan(x) == False]
+    print runs
+    max_run_lengthna = fs.loc[(fs["Month"] == str(m)) & (fs["Year"].isin(possible_years)),"Max Run"].tolist()
+    max_run_length = [x for x in max_run_lengthna if np.isnan(x) == False]
+    print max_run_length
+
+
+    if max_run_length.count(max_run_length[0]) != len(max_run_length): #if max lengths are not equal, remove the longest one. It's possible two months have the same max length. will remove the one that is lowest ranked
+        longest = max(max_run_length)
+        print longest
+        possible_years_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest) & (fs["Year"].isin(possible_years)),"Max Stat Rank" ]
+        print possible_years_ranks
+        #print "2nd test round",possible_years_ranks.head()
+        year_ranks = possible_years_ranks.tolist()
+        worst_rank = max(year_ranks)
+        #print "worst rank is", worst_rank
+        year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest),"Year"].iloc[0]
+        fs.loc[(fs["Month"] == str(m)) & (fs["Max Run"] == longest),"Year"] = np.nan
+
+        print "5,year to remove is", year_to_remove
+
+        if year_to_remove in trimmed_weight_rank_dict[m]:
+            del trimmed_weight_rank_dict[m][year_to_remove]
+
+
+        final_weight_rank_dict = trimmed_weight_rank_dict
+        print "possible years left are", final_weight_rank_dict
+
+    else:
+        if runs.count(runs[0]) == len(runs): #if number of ranks is equal, remove the bootom ranked one
+
+            ranks = fs.loc[(fs["Month"] == str(m)) & fs["Year"].isin(possible_years), "Max Stat Rank"].tolist()
+            max_rank = max(ranks)
+
+            year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == max_rank),"Year"].iloc[0]
+            fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == max_rank),"Year"] = np.nan
+            print "5 year to remove is", year_to_remove
+
+            del trimmed_weight_rank_dict[m][year_to_remove]
+            final_weight_rank_dict = trimmed_weight_rank_dict
+
+            print "possible years are", final_weight_rank_dict[m]
+
+        else: #remove the one with the most runs
+            most_runs = max(runs) #now, if the run numbers are unequal, remove the one with the most runs. It's possible the max will occur twice. let rankings determine winner then
+            if runs.count(most_runs) >1:
+
+                run_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Year"].isin(possible_years)),"Max Stat Rank"].tolist()
+                min_run_rank = min(run_ranks)
+
+                year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == min_run_rank) & (fs["Year"].isin(possible_years)),"Year"].iloc[0]
+                fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Max Stat Rank"] == min_run_rank),"Year"] = np.nan
+                print "6, year to remove is", year_to_remove
+
+            else:
+                year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs) & (fs["Year"].isin(possible_years)),"Year"].iloc[0]
+                fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == most_runs),"Max Stat Rank"] = np.nan
+                print "7, year to remove is", year_to_remove
+
+
+            if year_to_remove in trimmed_weight_rank_dict[m]:
+                del trimmed_weight_rank_dict[m][year_to_remove]
+
+            final_weight_rank_dict = trimmed_weight_rank_dict
+            print final_weight_rank_dict[m]
+    if 0 in runs:
+        runs_rank =  fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == 0) & (fs["Year"].isin(possible_years)),"Max Stat Rank"].tolist()
+        max_rank = max(runs_rank)
+
+        year_to_remove = fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == 0) & (fs["Max Stat Rank"] == max_rank) & (fs["Year"].isin(possible_years)),"Year"].iloc[0]
+        fs.loc[(fs["Month"] == str(m)) & (fs["Run Count"] == 0) & (fs["Max Stat Rank"] == max_rank),"Year"] = np.nan
+        print "8, year to remove is", year_to_remove
+
+        if year_to_remove in trimmed_weight_rank_dict[m]:
+            del trimmed_weight_rank_dict[m][year_to_remove]
+
+    final_weight_rank_dict = trimmed_weight_rank_dict
+    print "possible values are", final_weight_rank_dict[m]
+tmy = {}
+for m in final_weight_rank_dict:
+
+
+    possible_years = [x for x in final_weight_rank_dict[m]]
+    print "possible years from final weight dict are", possible_years
+    #possible_years_y = [x for x in possible_years_x if np.isnan(x) == False]
+
+
+    possible_years_ranks = fs.loc[(fs["Month"] == str(m)) & (fs["Year"].isin(possible_years)),"Max Stat Rank"].tolist()
+    min_rank = min(possible_years_ranks)
+
+    year_to_select = fs.loc[(fs["Month"] == str(m)) & (fs["Max Stat Rank"] == min_rank),"Year"].iloc[0]
+    selected_year[str(m)] = year_to_select
+
+    print m, year_to_select
+
+pickle.dump(tmy,open("NCEI TMY Pickle","wb"))
+
+print time.time() - start_time
+
+
+# # must now determine 5 candidates for each month. They will have the lowest weighted score    #in fs group by month, sort by sum, drop bottom 7
+#     #then calculate short term and long term median and mean for each of these months for temp and max temp # calc from short term averages and long term averages (mean and median version), add to FS at y-m level
+#         #calculate the deltas between the short and long term statistics for both variables
+#             #for ecah month, assign the maximum of these four statistics
+#                 #rank them
+#     # calculate number of an length of runs above and below long term levels # do this within the shortterm averages (number of runs, max run length), add to fs at y-m level
+#         #for temp, above 67th and below 33rd
+#     #elimination
+#         #if no months have runs, the first month ranked is chosen
+#         #if run number is equal
+#             # if run length is unequal
+#                 #remove the one with the longest
+#             # if run length is equal
+#                 #remove the bottom ranked one (from mean median rank)
+#         #if run numbers are unequal
+#             #remove one with most runs
+#
+#         #if remaining months have unequal max run length
+#             #remove the month with the longest run
+#         #if remaining months have the same max run length
+#             #if number of runs is equal, remove the bottom ranked one
+#             #if the number of runs is not equal,
+#                 #remove the one with the most runs
+#         #remove the month with zero runs
+#         #select the top ranked month
+
+t = pd.date_range(start = "1980-01-01 00:00:00", end = "2015-12-31 23:30:00", freq= "3H")
+#t_index = pd.MultiIndex.from_arrays([t.year,t.month,t.day,t.hour], names = ["Year","Month","Day","Hour"])
+
+q = pd.DataFrame(np.random.randn(len(t),1), columns = ["Dummy"], index = t )
